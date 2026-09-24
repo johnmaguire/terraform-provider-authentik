@@ -2,6 +2,7 @@ package provider
 
 import (
 	"context"
+	"slices"
 	"strconv"
 
 	"github.com/hashicorp/terraform-plugin-sdk/v2/diag"
@@ -56,7 +57,8 @@ func resourceProviderProxy() *schema.Resource {
 				Default:  true,
 			},
 			"property_mappings": {
-				Type: schema.TypeList,
+				Description: "Additional scope mappings. Authentik's built-in proxy mappings are always applied and may be omitted. Explicitly listed built-in mappings remain in state; imports include only additional mappings. Reading this resource requires permission to view scope mappings.",
+				Type:        schema.TypeList,
 				Elem: &schema.Schema{
 					Type: schema.TypeString,
 				},
@@ -217,14 +219,29 @@ func resourceProviderProxyRead(ctx context.Context, d *schema.ResourceData, m an
 	helpers.SetWrapper(d, "access_token_validity", res.AccessTokenValidity)
 	helpers.SetWrapper(d, "refresh_token_validity", res.RefreshTokenValidity)
 	localMappings := helpers.CastSlice[string](d, "property_mappings")
-	if len(localMappings) > 0 {
-		// Only update mappings if any were set in TF resource, since authentik will always set the
-		// default mappings, even when nothing is specified
-		helpers.SetWrapper(d, "property_mappings", helpers.ListConsistentMerge(
-			localMappings,
-			res.PropertyMappings,
-		))
+	defaultMappings, _, err := c.client.PropertymappingsAPI.PropertymappingsProviderScopeList(ctx).
+		Managed([]string{
+			"goauthentik.io/providers/oauth2/scope-openid",
+			"goauthentik.io/providers/oauth2/scope-profile",
+			"goauthentik.io/providers/oauth2/scope-email",
+			"goauthentik.io/providers/oauth2/scope-entitlements",
+			"goauthentik.io/providers/proxy/scope-proxy",
+		}).PageSize(100).Execute()
+	if err != nil {
+		return diag.Errorf("Failed to read built-in proxy property mappings: %s", err)
 	}
+	implicitMappings := make(map[string]bool, len(defaultMappings.Results))
+	for _, mapping := range defaultMappings.Results {
+		implicitMappings[mapping.Pk] = !slices.Contains(localMappings, mapping.Pk)
+	}
+	mappings := make([]string, 0, len(res.PropertyMappings))
+	for _, id := range res.PropertyMappings {
+		// Authentik restores its built-in mappings after every write; all other mappings remain managed by Terraform.
+		if !implicitMappings[id] {
+			mappings = append(mappings, id)
+		}
+	}
+	helpers.SetWrapper(d, "property_mappings", helpers.ListConsistentMerge(localMappings, mappings))
 	helpers.SetWrapper(d, "jwt_federation_providers", helpers.ListConsistentMerge(
 		helpers.CastSlice[int](d, "jwt_federation_providers"),
 		helpers.Slice32ToInt(res.JwtFederationProviders),

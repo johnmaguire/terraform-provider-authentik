@@ -61,7 +61,7 @@ resource "authentik_application" "name" {
   - `forward_single`
   - `forward_domain`
  Defaults to `proxy`.
-- `property_mappings` (List of String)
+- `property_mappings` (List of String) Additional scope mappings. Authentik's built-in proxy mappings are always applied and may be omitted. Explicitly listed built-in mappings remain in state; imports include only additional mappings. Reading this resource requires permission to view scope mappings.
 - `refresh_token_validity` (String) Format: hours=1;minutes=2;seconds=3. Defaults to `days=30`.
 - `skip_path_regex` (String)
 
